@@ -1,0 +1,25 @@
+"dataset_id","file_name","relative_path","description","n_observations","has_na"
+"DS01","DS01_bike_daily_temp.csv","paper_datasets_csv/DS01_bike_daily_temp.csv","Bike Sharing Daily - Temperature",730,FALSE
+"DS02","DS02_bike_daily_humidity.csv","paper_datasets_csv/DS02_bike_daily_humidity.csv","Bike Sharing Daily - Humidity",730,FALSE
+"DS03","DS03_bike_daily_windspeed.csv","paper_datasets_csv/DS03_bike_daily_windspeed.csv","Bike Sharing Daily - Windspeed",730,FALSE
+"DS04","DS04_bike_daily_count.csv","paper_datasets_csv/DS04_bike_daily_count.csv","Bike Sharing Daily - Count of Bike Rentals",730,FALSE
+"DS05","DS05_bike_hourly_temp.csv","paper_datasets_csv/DS05_bike_hourly_temp.csv","Bike Sharing Hourly - Temperature",17378,FALSE
+"DS06","DS06_bike_hourly_humidity.csv","paper_datasets_csv/DS06_bike_hourly_humidity.csv","Bike Sharing Hourly - Humidity",17378,FALSE
+"DS07","DS07_bike_hourly_windspeed.csv","paper_datasets_csv/DS07_bike_hourly_windspeed.csv","Bike Sharing Hourly - Windspeed",17378,FALSE
+"DS08","DS08_bike_hourly_count.csv","paper_datasets_csv/DS08_bike_hourly_count.csv","Bike Sharing Hourly - Count of Bike Rentals",17378,FALSE
+"DS09","DS09_icelandic_river_flow.csv","paper_datasets_csv/DS09_icelandic_river_flow.csv","Icelandic River - Flow of Vatnsdalsa River (Daily)",1095,FALSE
+"DS10","DS10_porto_min_temp.csv","paper_datasets_csv/DS10_porto_min_temp.csv","Porto Weather - Minimum Temperature (Daily)",1456,FALSE
+"DS11","DS11_porto_max_temp.csv","paper_datasets_csv/DS11_porto_max_temp.csv","Porto Weather - Maximum Temperature (Daily)",1456,FALSE
+"DS12","DS12_porto_max_steady_wind.csv","paper_datasets_csv/DS12_porto_max_steady_wind.csv","Porto Weather - Maximum Steady Wind (Daily)",1456,TRUE
+"DS13","DS13_porto_max_wind_gust.csv","paper_datasets_csv/DS13_porto_max_wind_gust.csv","Porto Weather - Maximum Wind Gust (Daily)",1456,TRUE
+"DS14","DS14_istanbul_sp.csv","paper_datasets_csv/DS14_istanbul_sp.csv","Istanbul Stock Exchange - S&P (Daily)",536,FALSE
+"DS15","DS15_istanbul_dax.csv","paper_datasets_csv/DS15_istanbul_dax.csv","Istanbul Stock Exchange - DAX (Daily)",536,FALSE
+"DS16","DS16_istanbul_ftse.csv","paper_datasets_csv/DS16_istanbul_ftse.csv","Istanbul Stock Exchange - FTSE (Daily)",536,FALSE
+"DS17","DS17_istanbul_nikkei.csv","paper_datasets_csv/DS17_istanbul_nikkei.csv","Istanbul Stock Exchange - NIKKEI (Daily)",536,FALSE
+"DS18","DS18_istanbul_bovespa.csv","paper_datasets_csv/DS18_istanbul_bovespa.csv","Istanbul Stock Exchange - BOVESPA (Daily)",536,FALSE
+"DS19","DS19_istanbul_eu.csv","paper_datasets_csv/DS19_istanbul_eu.csv","Istanbul Stock Exchange - EU (Daily)",536,FALSE
+"DS20","DS20_istanbul_em.csv","paper_datasets_csv/DS20_istanbul_em.csv","Istanbul Stock Exchange - Emerging Markets (Daily)",536,FALSE
+"DS21","DS21_australian_demand.csv","paper_datasets_csv/DS21_australian_demand.csv","Australian Electricity Load - Total Demand (Half-Hourly)",239602,FALSE
+"DS22","DS22_australian_rrp.csv","paper_datasets_csv/DS22_australian_rrp.csv","Australian Electricity Load - Recommended Retail Price (Half-Hourly)",239602,FALSE
+"DS23","DS23_porto_water_pedroucos.csv","paper_datasets_csv/DS23_porto_water_pedroucos.csv","Water Consumption of Oporto - Pedroucos (Half-Hourly)",51208,TRUE
+"DS24","DS24_porto_water_rotunda.csv","paper_datasets_csv/DS24_porto_water_rotunda.csv","Water Consumption of Oporto - Rotunda AEP (Half-Hourly)",51208,TRUE
