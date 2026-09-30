@@ -7,24 +7,28 @@
 The 4 new descriptors (Atividade 2):
   c2         feature-target correlation      (Lorena et al. 2018, complexity)
   s4         1-NN non-linearity              (Lorena et al. 2018, complexity)
-  l1         linear-model error               (Lorena et al. 2018, model-based)
+  l1         linear-regression error          (Lorena et al. 2018, complexity)
   theta_hat  extremal index of the rare values (Ferro & Segers 2003, tail)
 
-c2, s4 and l1 are computed on the time-delay embedding the base experiment
-trains on (V1..V9 -> V10), min-max scaled to [0, 1] per dataset so values are
-comparable across series with different units (as ECoL does). theta_hat is
-computed on the raw, contiguous series (see extremal_index).
+c2, s4 and l1 come from ECoL, the R package of Lorena et al., called through
+rpy2 as Meta-IR does. They are computed on the time-delay embedding the base
+experiment trains on (V1..V9 -> V10); ECoL min-max scales it itself.
+theta_hat is computed on the raw, contiguous series (see extremal_index).
 """
+import os
 import time
 
 import ImbalancedLearningRegression as iblr
 import numpy as np
 import pandas as pd
 from imbalance_eval import _iblr_numpy_quantile_compat, compute_imbalance
-from scipy.stats import spearmanr
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.svm import LinearSVR
 from tsfel.feature_extraction import features as tsfel
+
+os.environ.setdefault("RPY2_CFFI_MODE", "ABI")  # ABI mode works with any local R build
+import rpy2.robjects as ro  # noqa: E402
+from rpy2.robjects import numpy2ri  # noqa: E402
+from rpy2.robjects.conversion import localconverter  # noqa: E402
+from rpy2.robjects.packages import STAP  # noqa: E402
 
 from src import data
 from src.data import SEED
@@ -80,50 +84,56 @@ def x_base(series: dict) -> pd.DataFrame:
     return pd.DataFrame({ds: base_row(y) for ds, y in series.items()}).T[X_BASE].astype(float)
 
 
-def scaled_embedding(y: np.ndarray):
-    """The base experiment's embedding (V1..V9 -> V10), each column min-max
-    scaled to [0, 1] so c2/s4/l1 do not depend on the series' units.
-    Returns (X, t): the 9 lag columns and the target column."""
-    E = data.embed(y).to_numpy()
-    E = (E - E.min(axis=0)) / (E.max(axis=0) - E.min(axis=0))
-    return E[:, :-1], E[:, -1]
+# The three complexity measures, straight from ECoL (tested with ECoL 0.4.4).
+# E is the embedding as an R matrix: columns V1..V9 are the inputs, V10 the target.
+ECOL = STAP("""
+x_of <- function(E) as.data.frame(E[, -ncol(E), drop=FALSE])
+y_of <- function(E) E[, ncol(E)]
+c2 <- function(E) ECoL::correlation(x_of(E), y_of(E), measures="C2", summary="mean")$C2[[1]]
+l1 <- function(E) ECoL::linearity(x_of(E), y_of(E), measures="L1", summary="mean")$L1[[1]]
+s4 <- function(E, seed) {
+  # ECoL::smoothness() first builds dist(x) -- O(n^2) memory, ~230 GB for the
+  # longest series -- although S4 never uses it. So apply smoothness()'s own
+  # preprocessing (min-max scale, sort by target) and call its S4 directly.
+  x <- ECoL:::normalize(x_of(E))
+  y <- ECoL:::normalize(y_of(E))[, 1]
+  o <- order(y)
+  set.seed(seed)
+  mean(ECoL:::r.S4(NULL, x[o, , drop=FALSE], y[o]))
+}
+""", "ecol")
 
 
-def c2(X: np.ndarray, t: np.ndarray) -> float:
-    """C2 (Lorena et al. 2018): mean |Spearman rho| between each lag and the target.
+def r_embedding(y: np.ndarray):
+    """The base experiment's embedding (V1..V9 -> V10) as an R matrix, for ECoL."""
+    with localconverter(ro.default_converter + numpy2ri.converter):
+        return ro.conversion.get_conversion().py2rpy(data.embed(y).to_numpy())
+
+
+def c2(E) -> float:
+    """C2: mean |Spearman rho| between each lag and the target.
     High = the recent past still predicts the next value."""
-    return float(np.mean([abs(spearmanr(X[:, j], t)[0]) for j in range(X.shape[1])]))
+    return float(ECOL.c2(E)[0])
 
 
-def s4(X: np.ndarray, t: np.ndarray) -> float:
-    """S4 (Lorena et al. 2018): non-linearity of the 1-NN regressor.
-
-    Sort the examples by target, create one synthetic example between each
-    pair of neighbours in that order (random convex combination of both x and
-    target), and report the MSE of a 1-NN regressor trained on the real data
-    when predicting them. This is the same interpolation SMOTER performs, so a
-    high S4 says interpolated examples do not look like real ones."""
-    order = np.argsort(t, kind="stable")
-    Xs, ts = X[order], t[order]
-    lam = np.random.default_rng(SEED).uniform(size=(len(ts) - 1, 1))
-    X_new = Xs[:-1] + lam * (Xs[1:] - Xs[:-1])
-    t_new = ts[:-1] + lam[:, 0] * (ts[1:] - ts[:-1])
-    predicted = KNeighborsRegressor(n_neighbors=1).fit(X, t).predict(X_new)
-    return float(np.mean((predicted - t_new) ** 2))
+def s4(E) -> float:
+    """S4: interpolate each pair of examples adjacent in target order (as SMOTER
+    does) and measure how badly a 1-NN trained on the real data predicts them;
+    mean of e / (1 + e) over the squared errors e. High = interpolated examples
+    do not look like real ones."""
+    return float(ECOL.s4(E, SEED)[0])
 
 
-def l1(X: np.ndarray, t: np.ndarray) -> float:
-    """L1 (Lorena et al. 2018): mean absolute error of a linear SVR fitted to the
-    data (ECoL's defaults: C = 1, epsilon = 0.1). Low = the problem is already
-    close to linear, so resampling has little left to fix."""
-    model = LinearSVR(C=1.0, epsilon=0.1, max_iter=10_000, random_state=SEED).fit(X, t)
-    return float(np.mean(np.abs(model.predict(X) - t)))
+def l1(E) -> float:
+    """L1: mean of |r| / (1 + |r|) over the residuals r of a least-squares linear
+    regression. Low = the problem is already close to linear."""
+    return float(ECOL.l1(E)[0])
 
 
 def complexity(y: np.ndarray) -> dict:
-    """c2, s4 and l1 of one raw series (convenience wrapper; x_new times them separately)."""
-    X, t = scaled_embedding(y)
-    return {"c2": c2(X, t), "s4": s4(X, t), "l1": l1(X, t)}
+    """c2, s4 and l1 of one raw series (for the tests; extract() times them separately)."""
+    E = r_embedding(y)
+    return {"c2": c2(E), "s4": s4(E), "l1": l1(E)}
 
 
 def rare_mask(y: np.ndarray) -> np.ndarray:
@@ -183,10 +193,10 @@ def extract(series: dict):
 
     for ds, y in series.items():
         row = timed(ds, "X_base (imbalance + TSFEL)", base_row, y)
-        X, t = timed(ds, "embedding", scaled_embedding, y)
-        row["c2"] = timed(ds, "c2", c2, X, t)
-        row["s4"] = timed(ds, "s4", s4, X, t)
-        row["l1"] = timed(ds, "l1", l1, X, t)
+        E = timed(ds, "embedding", r_embedding, y)
+        row["c2"] = timed(ds, "c2", c2, E)
+        row["s4"] = timed(ds, "s4", s4, E)
+        row["l1"] = timed(ds, "l1", l1, E)
         row["theta_hat"] = timed(ds, "theta_hat", lambda v: extremal_index(rare_mask(v)), y)
         rows[ds] = row
 

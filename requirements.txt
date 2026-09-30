@@ -6,3 +6,5 @@ matplotlib==3.11.1
 tsfel==0.2.0
 pytest>=7.0
 imbalance-eval @ git+https://github.com/jpmsilva1/imbalance_eval.git
+rpy2==3.6.4
+# plus R (tested with 4.5.3) and the R package ECoL 0.4.4: install.packages("ECoL")

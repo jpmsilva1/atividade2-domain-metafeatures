@@ -70,15 +70,6 @@ def test_loss_curve_is_the_gap_to_the_best_workflow_found_so_far():
     np.testing.assert_allclose(analysis.loss_curve(P_row, ranking), [0.7, 0.4, 0.0])
 
 
-def test_redundancy_groups_monotone_copies_only():
-    # b is a monotone transform of a (Spearman r = 1): same cluster. c is independent.
-    a = np.random.default_rng(1).standard_normal(24)
-    X = pd.DataFrame({"a": a, "b": np.exp(a), "c": np.random.default_rng(2).standard_normal(24)})
-    corr, cluster = analysis.redundancy(X)
-    assert corr.loc["a", "b"] == pytest.approx(1.0)
-    assert cluster["a"] == cluster["b"] != cluster["c"]
-
-
 def test_cd_cliques_join_only_methods_within_cd():
     # Ranks 1.0, 1.5, 3.0 with CD 0.8: only the first two are indistinguishable.
     assert figures.cliques([1.0, 1.5, 3.0], cd=0.8) == [(0, 1)]

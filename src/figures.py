@@ -9,11 +9,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from src import approaches, features
+from src import features
+from src.analysis import REDUNDANCY_THRESHOLD
 from src.data import FIG_DIR, RESULTS_DIR
 
-DARK, TEAL, GOLD, SAND, CORAL, GREY = "#264653", "#2A9D8F", "#E9C46A", "#F4A261", "#E76F51", "#B0BEC5"
-ARM_COLOR = {"X_base": GREY, "X_pruned": GOLD, "X_ext": TEAL}
+DARK, TEAL, CORAL, GREY = "#264653", "#2A9D8F", "#E76F51", "#B0BEC5"
 APPROACH_STYLE = {  # X-dependent approaches in colour, X-blind references in grey
     "Approach1": dict(color=DARK), "Approach2": dict(color=TEAL), "HARRIS": dict(color=CORAL),
     "AR": dict(color=GREY, ls="--"), "MR": dict(color=GREY, ls=":"),
@@ -100,27 +100,6 @@ def fig_loss_curves():
     save(fig, "fig_loss_curves")
 
 
-def fig_spearman():
-    s = pd.read_csv(RESULTS_DIR / "spearman.csv")
-    fig, ax = plt.subplots(figsize=(8, 3.2))
-    positions, labels = [], []
-    for i, name in enumerate(approaches.X_DEPENDENT):
-        for j, arm in enumerate(ARMS):
-            pos = i * 4 + j
-            box = ax.boxplot(s[(s.approach == name) & (s.arm == arm)]["spearman"], positions=[pos],
-                             widths=0.7, patch_artist=True, medianprops=dict(color="black"))
-            box["boxes"][0].set_facecolor(ARM_COLOR[arm])
-        positions.append(i * 4 + 1), labels.append(name)
-    for name in ["AR", "MR", "SigWins"]:
-        ax.axhline(s[s.approach == name]["spearman"].mean(), label=f"{name} (mean)",
-                   **APPROACH_STYLE[name], lw=1)
-    ax.set_xticks(positions, labels), ax.set_ylabel("Spearman $\\rho$ (per dataset)")
-    ax.legend(handles=[plt.Rectangle((0, 0), 1, 1, color=ARM_COLOR[a]) for a in ARMS]
-              + ax.get_legend_handles_labels()[0], labels=ARMS + ax.get_legend_handles_labels()[1],
-              ncol=6, loc="upper center", bbox_to_anchor=(0.5, -0.12))
-    save(fig, "fig_spearman")
-
-
 def bold_new(ticks):
     for tick in ticks:
         if tick.get_text().split(" ")[0] in features.NEW_FEATURES:
@@ -129,20 +108,29 @@ def bold_new(ticks):
 
 def fig_redundancy():
     """Only the question 2.1.2 asks: new features (rows) against the 15 X_base
-    columns, with each new feature's largest |r| in its label."""
+    columns and against each other, with each new feature's largest |r| in its
+    label and every |r| above the redundancy threshold boxed."""
     corr = pd.read_csv(RESULTS_DIR / "redundancy_corr.csv", index_col=0)
-    strip = corr.loc[features.NEW_FEATURES, features.X_BASE]
-    fig, ax = plt.subplots(figsize=(11, 3.2))
+    strip = corr.loc[features.NEW_FEATURES, features.X_BASE + features.NEW_FEATURES]
+    for f in features.NEW_FEATURES:
+        strip.loc[f, f] = np.nan  # self-correlation, not information
+    fig, ax = plt.subplots(figsize=(13, 3.2))
     im = ax.imshow(strip, cmap="RdBu_r", vmin=-1, vmax=1, aspect="auto")
     ax.set_xticks(range(strip.shape[1]), strip.columns, rotation=60, ha="right")
     ax.set_yticks(range(len(strip)), [f"{f} (max |r| {strip.loc[f].abs().max():.2f})"
                                       for f in strip.index]), ax.grid(False)
-    bold_new(ax.get_yticklabels())
+    bold_new(ax.get_yticklabels()), bold_new(ax.get_xticklabels())
+    ax.axvline(len(features.X_BASE) - 0.5, color="black", lw=1.5)  # X_base | new
     for i in range(strip.shape[0]):
         for j in range(strip.shape[1]):
             v = strip.iat[i, j]
+            if np.isnan(v):
+                continue
             ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=10,
                     color="white" if abs(v) > 0.6 else "black")
+            if abs(v) > REDUNDANCY_THRESHOLD:
+                ax.add_patch(plt.Rectangle((j - 0.5, i - 0.5), 1, 1, fill=False,
+                                           ec="black", lw=2.5))
     fig.colorbar(im, ax=ax, label="Spearman r")
     save(fig, "fig_redundancy")
 
@@ -150,26 +138,43 @@ def fig_redundancy():
 STRATEGY_ORDER = ["none", "under", "over", "smote"]
 
 
+def importance_bars(ax, imp: pd.Series, title: str):
+    """Meta-IR Fig. 11 style: horizontal Gini importance bars coloured by feature group."""
+    imp = imp.sort_values()
+    ax.barh(imp.index, imp, color=[GROUP_COLOR[FEATURE_GROUP.get(f, "TSFEL")] for f in imp.index])
+    ax.set_title(title), ax.set_xlabel("Gini importance")
+    bold_new(ax.get_yticklabels())
+
+
+def group_legend(fig):
+    fig.legend(handles=[plt.Rectangle((0, 0), 1, 1, color=c) for c in GROUP_COLOR.values()],
+               labels=list(GROUP_COLOR), loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.03))
+
+
 def fig_importance():
-    """(a, b) Meta-IR Fig. 11 style: Gini importance of the best-learner and
-    best-resampling-family classifiers, bars coloured by feature group.
-    (c) Meta-Scaler Fig. 5 style: one row per base learner, importance of the
-    classifier predicting that learner's best resampling family; top 2 labelled."""
+    """Main text: Gini importance of the two Meta-IR Fig. 11 classifiers. (a) best
+    learner, the only one that beats chance (predictive_check.csv); (b) best
+    resampling family, which does not (the report caption says so)."""
     meta_ir = pd.read_csv(RESULTS_DIR / "importance_meta_ir.csv", index_col=0)
+    fig, (a, b) = plt.subplots(1, 2, figsize=(12, 5.6), sharex=True, gridspec_kw=dict(wspace=0.55))
+    importance_bars(a, meta_ir["learner"], "(a) best learner")
+    importance_bars(b, meta_ir["strategy"], "(b) best resampling family")
+    for ax in (a, b):  # shrunk to 0.6 of the page, so larger than the rcParams default
+        ax.tick_params(labelsize=16), ax.xaxis.label.set_size(17), ax.title.set_size(18)
+    group_legend(fig)
+    save(fig, "fig_importance")
+
+
+def fig_importance_annex():
+    """Annex B, Meta-Scaler Fig. 5 style: one row per base learner, importance of
+    the classifier predicting that learner's best resampling family; top 2
+    labelled. None of them beats chance (predictive_check.csv)."""
     per_learner = pd.read_csv(RESULTS_DIR / "importance_per_learner.csv", index_col=0)
-    # Training labels of the (c) classifiers, shown as counts next to each learner.
+    # Training labels of the (b) classifiers, shown as counts next to each learner.
     labels = pd.read_csv(RESULTS_DIR / "best_strategy_per_learner.csv", index_col=0)
     order = sorted(per_learner.columns, key=lambda f: list(GROUP_COLOR).index(FEATURE_GROUP.get(f, "TSFEL")))
-    fig = plt.figure(figsize=(15, 5.6))
-    grid = fig.add_gridspec(len(per_learner), 3, width_ratios=[1, 1, 1.6], wspace=0.55, hspace=0.25)
-    for col, target, title in [(0, "learner", "(a) best learner"), (1, "strategy", "(b) best resampling family")]:
-        ax = fig.add_subplot(grid[:, col])
-        imp = meta_ir[target].sort_values()
-        ax.barh(imp.index, imp, color=[GROUP_COLOR[FEATURE_GROUP.get(f, "TSFEL")] for f in imp.index])
-        ax.set_title(title), ax.set_xlabel("Gini importance")
-        bold_new(ax.get_yticklabels())
-    for i, (learner, imp) in enumerate(per_learner[order].iterrows()):
-        ax = fig.add_subplot(grid[i, 2])
+    fig, axes = plt.subplots(len(per_learner), 1, figsize=(7, 5.6), gridspec_kw=dict(hspace=0.25))
+    for i, (ax, (learner, imp)) in enumerate(zip(axes, per_learner[order].iterrows())):
         ax.bar(range(len(order)), imp, color=[GROUP_COLOR[FEATURE_GROUP.get(f, "TSFEL")] for f in order])
         for rank, f in enumerate(imp.nlargest(2).index):  # 2nd label higher, so neighbours don't collide
             ax.annotate(f, (order.index(f), imp[f]), textcoords="offset points", xytext=(0, 2 + 11 * rank),
@@ -183,11 +188,10 @@ def fig_importance():
         ax.set_xticks(range(len(order)), order if i == len(per_learner) - 1 else [], rotation=90, fontsize=10)
         ax.grid(False)
         if i == 0:
-            ax.set_title("(c) best resampling family, per base learner")
+            ax.set_title("best resampling family, per base learner")
     bold_new(ax.get_xticklabels())
-    fig.legend(handles=[plt.Rectangle((0, 0), 1, 1, color=c) for c in GROUP_COLOR.values()],
-               labels=list(GROUP_COLOR), loc="upper center", ncol=4, bbox_to_anchor=(0.5, 1.03))
-    save(fig, "fig_importance")
+    group_legend(fig)
+    save(fig, "fig_importance_annex")
 
 
 PDP_STYLE = {"none": dict(color=GREY, ls="-"), "under": dict(color=DARK, ls="--"),
@@ -234,23 +238,8 @@ def fig_partial_dependence_ice():
     save(fig, "fig_partial_dependence_ice")
 
 
-def fig_extraction_cost():
-    cost = pd.read_csv(RESULTS_DIR / "extraction_cost.csv")
-    cost = cost[cost.block != "embedding"]
-    fig, ax = plt.subplots(figsize=(6, 3.6))
-    colors = [GREY, DARK, TEAL, CORAL, GOLD]
-    for color, (block, group) in zip(colors, cost.groupby("block", sort=False)):
-        g = group.groupby("n").seconds.mean()
-        ax.plot(g.index, g.values, "o-", color=color, label=block, ms=4)
-    ax.set_xscale("log"), ax.set_yscale("log")
-    ax.set_xlabel("series length n"), ax.set_ylabel("seconds per dataset")
-    ax.legend()
-    save(fig, "fig_extraction_cost")
-
-
 def run():
     FIG_DIR.mkdir(parents=True, exist_ok=True)
-    for draw in [fig_cd, fig_loss_curves, fig_spearman, fig_redundancy,
-                 fig_importance, fig_partial_dependence, fig_partial_dependence_ice,
-                 fig_extraction_cost]:
+    for draw in [fig_cd, fig_loss_curves, fig_redundancy, fig_importance, fig_importance_annex,
+                 fig_partial_dependence, fig_partial_dependence_ice]:
         draw()

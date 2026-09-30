@@ -93,15 +93,12 @@ class Approach1:
 
     target = "P"
 
-    def __init__(self, seed=SEED):
-        self.seed = seed  # varied only by the seed-sensitivity check in analysis.py
-
     def fit(self, X, P, R, P_folds):
         Y = P if self.target == "P" else R
         self.columns = Y.columns
         # n_jobs=-1 fits the 52 forests in parallel; each keeps random_state, so
         # the result is identical to fitting them one after the other.
-        self.model = MultiOutputRegressor(RandomForestRegressor(random_state=self.seed), n_jobs=-1)
+        self.model = MultiOutputRegressor(RandomForestRegressor(random_state=SEED), n_jobs=-1)
         self.model.fit(X.to_numpy(), Y.to_numpy())
         return self
 

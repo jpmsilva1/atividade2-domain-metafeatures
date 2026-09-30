@@ -1,18 +1,16 @@
 """Step 4 -- the three analyses the assignment asks for (section 2.1).
 
   2.1.1  relation of each meta-feature to the meta-target   -> association(), importance()
-  2.1.2  redundancy between meta-features                   -> redundancy()
+  2.1.2  redundancy between meta-features                   -> Spearman matrix in run()
   2.1.3  effect on the recommender, X_base vs X_ext          -> lodo(), summarize(), critical_difference()
 
 run() executes all of them and writes the CSVs that figures.py and the report read.
 """
 import json
-from functools import partial
 
 import numpy as np
 import pandas as pd
-from scipy.cluster.hierarchy import fcluster, linkage
-from scipy.spatial.distance import squareform
+from joblib import Parallel, delayed
 from scipy.stats import friedmanchisquare, spearmanr
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import partial_dependence
@@ -21,8 +19,7 @@ from src import approaches, features
 from src.data import RESULTS_DIR, SEED
 
 REDUNDANCY_THRESHOLD = 0.95  # |Spearman r| above which two meta-features say the same thing
-SENSITIVITY_SEEDS = [0, 1, 2, 3, 4]
-LEARNERS = ["lm", "mars", "rf", "rpart", "svm"]  # the base learners combined with resampling  # extra forest seeds for the seed-sensitivity check
+LEARNERS = ["lm", "mars", "rf", "rpart", "svm"]  # the base learners combined with resampling
 
 # Demsar (2006), Table 5: Nemenyi critical values q_alpha (alpha = 0.05) by number of methods k.
 Q_ALPHA = {2: 1.960, 3: 2.343, 4: 2.569, 5: 2.728, 6: 2.850, 7: 2.949, 8: 3.031, 9: 3.102, 10: 3.164}
@@ -84,21 +81,6 @@ def critical_difference(scores: pd.DataFrame) -> dict:
             "friedman_p": float(friedmanchisquare(*scores.T.to_numpy()).pvalue),
             "cd": float(Q_ALPHA[k] * np.sqrt(k * (k + 1) / (6 * n))),
             "n_datasets": n, "k_methods": k}
-
-
-# ------------------------------------------------------------ 2.1.2 -----
-
-def redundancy(X: pd.DataFrame):
-    """Spearman correlation between every pair of meta-features, and groups of
-    features that are near-copies of each other: hierarchical clustering on the
-    distance 1 - |r|, cut so that everything in a group has |r| > 0.95
-    (complete linkage: every pair inside a group, not just a chain).
-    Returns (correlation matrix, {feature: group id})."""
-    corr = X.corr(method="spearman")
-    distance = squareform(1 - corr.abs().to_numpy(), checks=False)
-    groups = fcluster(linkage(distance, method="complete"), t=1 - REDUNDANCY_THRESHOLD,
-                      criterion="distance")
-    return corr, pd.Series(groups, index=X.columns)
 
 
 # ------------------------------------------------------------ 2.1.1 -----
@@ -184,37 +166,31 @@ def loo_accuracy(X: pd.DataFrame, y: pd.Series, seed=SEED, n_estimators=500) -> 
     return float(np.mean(hits))
 
 
-def predictive_check(X: pd.DataFrame, targets: pd.DataFrame, n_shuffles=30) -> pd.DataFrame:
+def predictive_check(X: pd.DataFrame, targets: pd.DataFrame, n_shuffles=30,
+                     more_shuffles={"learner": 1000}, n_jobs=-4) -> pd.DataFrame:
     """Do the classifiers behind the importances predict anything? Per target:
     leave-one-out accuracy vs always guessing the most common class, and vs the
     same procedure on shuffled labels (chance). Importances and partial dependence
-    of a classifier that does not beat chance describe noise, not the data."""
+    of a classifier that does not beat chance describe noise, not the data.
+
+    With 30 shuffles the smallest possible p is 1/31; the one target that beats
+    every shuffle (the best learner) gets 1000, so its p is resolved. Its extra
+    shuffles come from their own generator, so every other target keeps the
+    same 30 shuffles. n_jobs=-4 leaves three cores free."""
     rng = np.random.default_rng(SEED)
     rows = []
     for name, y in targets.items():
         acc = loo_accuracy(X, y)
-        null = np.array([loo_accuracy(X, pd.Series(rng.permutation(y.to_numpy()), index=y.index), seed=i)
-                         for i in range(n_shuffles)])
+        labels = y.to_numpy()
+        perms = [rng.permutation(labels) for _ in range(n_shuffles)]
+        extra_rng = np.random.default_rng([SEED, len(rows)])
+        perms += [extra_rng.permutation(labels) for _ in range(more_shuffles.get(name, n_shuffles) - n_shuffles)]
+        null = np.array(Parallel(n_jobs=n_jobs, verbose=5)(delayed(loo_accuracy)(X, pd.Series(p, index=y.index), seed=i)
+                                            for i, p in enumerate(perms)))
         rows.append({"target": name, "loo_accuracy": acc,
                      "majority": y.value_counts().max() / len(y),
                      "shuffled_mean": null.mean(), "shuffled_p95": np.percentile(null, 95),
-                     "p_value": (np.sum(null >= acc) + 1) / (n_shuffles + 1)})
-    return pd.DataFrame(rows)
-
-
-def seed_sensitivity(arms: dict, P, R, P_folds, seeds=SENSITIVITY_SEEDS) -> pd.DataFrame:
-    """Mean Spearman of the two random-forest approaches on each arm, repeated
-    with different forest seeds. With 23 training datasets a forest is noisy:
-    if the gap between arms is smaller than the spread across seeds, the arms
-    are not really different -- the question 2.1.3's CD diagram cannot answer."""
-    rows = []
-    for seed in seeds:
-        models = {name: partial(approaches.ALL[name], seed=seed) for name in ["Approach1", "Approach2"]}
-        for arm, X in arms.items():
-            results = lodo(X, P, R, P_folds, models)
-            for name, group in results.groupby("approach"):
-                rows.append({"seed": seed, "arm": arm, "approach": name,
-                             "mean_spearman": group["spearman"].mean()})
+                     "n_shuffles": len(null), "p_value": (np.sum(null >= acc) + 1) / (len(null) + 1)})
     return pd.DataFrame(rows)
 
 
@@ -225,10 +201,9 @@ def run(X_all: pd.DataFrame, P: pd.DataFrame, R: pd.DataFrame, P_folds: dict):
     X_all = X_all.loc[P.index]  # same datasets, same order as the meta-target
     arms = features.arms(X_all)
 
-    # 2.1.2 redundancy -- over all 19 columns, so the pct_rare_08/09 pair is visible.
-    corr, groups = redundancy(X_all)
-    corr.to_csv(RESULTS_DIR / "redundancy_corr.csv")
-    groups.rename("group").to_csv(RESULTS_DIR / "redundancy_groups.csv", index_label="feature")
+    # 2.1.2 redundancy -- Spearman over all 19 columns, so the pct_rare_08/09 pair is
+    # visible; pairs with |r| > REDUNDANCY_THRESHOLD count as near-copies.
+    X_all.corr(method="spearman").to_csv(RESULTS_DIR / "redundancy_corr.csv")
 
     # 2.1.1 relation to the meta-target -- on X_ext, the extended set.
     association(arms["X_ext"], P).to_csv(RESULTS_DIR / "association_level.csv", index_label="feature")
@@ -242,7 +217,6 @@ def run(X_all: pd.DataFrame, P: pd.DataFrame, R: pd.DataFrame, P_folds: dict):
                      ).to_csv(RESULTS_DIR / "predictive_check.csv", index=False)
 
     compare_arms(arms, P, R, P_folds)
-    seed_sensitivity(arms, P, R, P_folds).to_csv(RESULTS_DIR / "seed_sensitivity.csv", index=False)
 
 
 def compare_arms(arms: dict, P, R, P_folds):
@@ -276,3 +250,10 @@ def compare_arms(arms: dict, P, R, P_folds):
             index="dataset_id", columns="approach", values="spearman")
         cd[arm] = critical_difference(scores)
     (RESULTS_DIR / "cd.json").write_text(json.dumps(cd, indent=2) + "\n")
+
+    # The transposed question, as in Atividade 1's ablations: within each
+    # X-dependent approach, do the three feature sets differ?
+    cd_sets = {name: critical_difference(spearman[spearman["approach"] == name].pivot(
+                   index="dataset_id", columns="arm", values="spearman")[list(arms)])
+               for name in approaches.X_DEPENDENT}
+    (RESULTS_DIR / "cd_feature_sets.json").write_text(json.dumps(cd_sets, indent=2) + "\n")
